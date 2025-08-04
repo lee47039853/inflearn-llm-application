@@ -1,0 +1,21 @@
+# LangChain packages
+langchain
+langchain-community
+langchain-google-genai
+langchain-chroma
+langchain-text-splitters
+
+# Vector database
+chromadb
+
+# Document loading
+python-docx
+docx2txt
+
+# Environment variables
+python-dotenv
+
+# Korean embedding model packages
+sentence-transformers
+torch
+transformers
