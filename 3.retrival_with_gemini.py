@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 RAG (Retrieval-Augmented Generation) 시스템 예제
-문서 기반 질의응답 시스템 - 대화 히스토리 포함
+문서 기반 질의응답 시스템 - 대화 히스토리 및 LLM 쿼리 개선 포함
 """
 
 from langchain_community.document_loaders import Docx2txtLoader
@@ -20,13 +20,88 @@ import logging
 import re
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
 class EnhancedRAGSystem:
     """향상된 RAG 시스템 클래스"""
     
-    def __init__(self, database, llm):
+    def __init__(self, database, llm, use_query_optimization: bool = True):
         self.database = database
         self.llm = llm
+        self.use_query_optimization = use_query_optimization
+        
+        # 세금 관련 키워드 사전 정의
+        self.tax_dictionary = [
+            "사람을 나타내는 표현 -> 거주자",
+            "소득을 나타내는 표현 -> 연봉",
+            "세금 계산을 나타내는 표현 -> 계산",
+            "세율을 나타내는 표현 -> 세율",
+            "공제를 나타내는 표현 -> 공제",
+            "신고를 나타내는 표현 -> 신고",
+            "납부를 나타내는 표현 -> 납부",
+            "과세표준을 나타내는 표현 -> 과세표준",
+            "종합소득을 나타내는 표현 -> 종합소득",
+            "법인세를 나타내는 표현 -> 법인세",
+            "부가가치세를 나타내는 표현 -> 부가가치세",
+            "양도소득세를 나타내는 표현 -> 양도소득세",
+            "상속세를 나타내는 표현 -> 상속세",
+            "증여세를 나타내는 표현 -> 증여세"
+        ]
+        
+        # RAG 체인 생성
+        self.qa_chain = RetrievalQA.from_chain_type(
+            llm, 
+            retriever=database.as_retriever(),
+            chain_type_kwargs={"prompt": hub.pull("rlm/rag-prompt")}
+        )
+        
+        # 쿼리 개선 체인 생성 (선택적)
+        if self.use_query_optimization:
+            self.query_improvement_chain = self._create_query_improvement_chain()
+            # 통합 체인 생성 (쿼리 개선 + RAG)
+            self.integrated_chain = self._create_integrated_chain()
+        else:
+            self.query_improvement_chain = None
+            self.integrated_chain = None
+    
+    def _create_query_improvement_chain(self):
+        """쿼리 개선을 위한 LCEL 체인 생성"""
+        prompt = ChatPromptTemplate.from_template(f"""
+            사용자의 질문을 보고, 우리의 세금 관련 사전을 참고해서 사용자의 질문을 변경해주세요.
+            만약 변경할 필요가 없다고 판단된다면, 사용자의 질문을 변경하지 않아도 됩니다.
+            그런 경우에는 질문만 리턴해주세요.
+            
+            세금 관련 사전: {self.tax_dictionary}
+            
+            질문: {{question}}
+            
+            개선된 질문:
+        """)
+        
+        return prompt | self.llm | StrOutputParser()
+    
+    def _create_integrated_chain(self):
+        """쿼리 개선과 RAG를 통합한 LCEL 체인 생성"""
+        # 쿼리 개선 체인
+        query_improvement = self.query_improvement_chain
+        
+        # RAG 체인 (개선된 쿼리 사용)
+        rag_chain = {"query": query_improvement} | self.qa_chain
+        
+        return rag_chain
+    
+    def improve_query(self, query: str) -> str:
+        """LLM을 통해 쿼리 개선"""
+        if not self.use_query_optimization:
+            return query  # 쿼리 최적화가 비활성화된 경우 원본 쿼리 반환
+        
+        try:
+            improved_query = self.query_improvement_chain.invoke({"question": query})
+            return improved_query.strip()
+        except Exception as e:
+            print(f"⚠️  쿼리 개선 중 오류: {e}")
+            return query
     
     def search_documents(self, query: str, top_k: int = 5) -> List[Tuple]:
         """문서 검색 수행"""
@@ -36,6 +111,78 @@ class EnhancedRAGSystem:
         except Exception as e:
             print(f"⚠️  검색 중 오류: {e}")
             return []
+    
+    def process_query_with_improvement(self, query: str) -> Dict:
+        """쿼리 개선 후 RAG 처리"""
+        print("\n🔧 쿼리 처리:")
+        print("=" * 60)
+        
+        # 1. 쿼리 개선 (선택적)
+        print(f"1️⃣ 원본 쿼리: '{query}'")
+        if self.use_query_optimization:
+            improved_query = self.improve_query(query)
+            print(f"2️⃣ 개선된 쿼리: '{improved_query}'")
+            search_query = improved_query
+        else:
+            print("2️⃣ 쿼리 최적화 비활성화 - 원본 쿼리 사용")
+            improved_query = query
+            search_query = query
+        print("-" * 40)
+        
+        # 2. 쿼리로 문서 검색
+        print("3️⃣ 문서 검색 수행 중...")
+        retrieved_docs_with_scores = self.search_documents(search_query, top_k=5)
+        retrieved_docs = [doc for doc, _ in retrieved_docs_with_scores]
+        print(f"   검색된 문서 수: {len(retrieved_docs)}")
+        print("-" * 40)
+        
+        # 3. AI 응답 생성
+        print("4️⃣ AI 응답 생성 중...")
+        try:
+            if self.use_query_optimization and self.integrated_chain:
+                # 통합 체인 사용 (쿼리 개선 + RAG)
+                ai_response = self.integrated_chain.invoke({"question": query})
+                response_text = ai_response['result']
+            else:
+                # 직접 RAG 실행
+                response_text = self.qa_chain({"query": search_query})['result']
+        except Exception as e:
+            print(f"⚠️  AI 응답 생성 중 오류: {e}")
+            # 개선된 쿼리로 직접 RAG 실행
+            response_text = self.qa_chain({"query": search_query})['result']
+        
+        print("=" * 60)
+        
+        return {
+            'original_query': query,
+            'improved_query': improved_query,
+            'retrieved_docs': retrieved_docs_with_scores,
+            'response': response_text,
+            'optimization_used': self.use_query_optimization
+        }
+    
+    def toggle_query_optimization(self):
+        """쿼리 최적화 기능 토글"""
+        self.use_query_optimization = not self.use_query_optimization
+        
+        if self.use_query_optimization and not self.query_improvement_chain:
+            # 쿼리 최적화 활성화 시 체인 생성
+            self.query_improvement_chain = self._create_query_improvement_chain()
+            self.integrated_chain = self._create_integrated_chain()
+            print("✅ 쿼리 최적화 기능이 활성화되었습니다.")
+        elif not self.use_query_optimization:
+            # 쿼리 최적화 비활성화 시 체인 제거
+            self.query_improvement_chain = None
+            self.integrated_chain = None
+            print("🚫 쿼리 최적화 기능이 비활성화되었습니다.")
+    
+    def get_optimization_status(self) -> Dict:
+        """쿼리 최적화 상태 정보 반환"""
+        return {
+            'enabled': self.use_query_optimization,
+            'has_chain': self.query_improvement_chain is not None,
+            'dictionary_count': len(self.tax_dictionary)
+        }
 
 class ConversationHistory:
     """대화 히스토리 관리 클래스"""
@@ -263,9 +410,6 @@ def get_user_choice():
             exit()
 
 
-
-
-
 def main():
     # LangChain 디버그 로깅 활성화 (선택사항)
     # logging.basicConfig(level=logging.DEBUG)
@@ -371,19 +515,34 @@ def main():
 
         # LLM 모델 초기화
         llm = ChatGoogleGenerativeAI(model='gemini-2.0-flash', temperature=0.9)
-        prompt = hub.pull("rlm/rag-prompt")
 
-        # RAG 체인 생성
-        qa_chain = RetrievalQA.from_chain_type(
-            llm, 
-            retriever=database.as_retriever(),
-            chain_type_kwargs={"prompt": prompt}
-        )
-
+        # 쿼리 최적화 기능 선택
+        print("\n🔧 쿼리 최적화 기능 설정:")
+        print("1. 쿼리 최적화 활성화 (LLM을 통한 질문 개선) - 추천")
+        print("2. 쿼리 최적화 비활성화 (원본 질문 그대로 사용)")
+        
+        while True:
+            try:
+                optimization_choice = input("\n선택하세요 (1-2): ").strip()
+                if optimization_choice in ['1', '2']:
+                    break
+                else:
+                    print("❌ 1, 2 중에서 선택하세요.")
+            except KeyboardInterrupt:
+                print("\n👋 프로그램을 종료합니다.")
+                exit()
+        
+        use_optimization = (optimization_choice == '1')
+        
         # 향상된 RAG 시스템 초기화
         print("\n🔧 향상된 RAG 시스템 초기화 중...")
-        enhanced_rag = EnhancedRAGSystem(database, llm)
+        enhanced_rag = EnhancedRAGSystem(database, llm, use_query_optimization=use_optimization)
         print("✅ 향상된 RAG 시스템 초기화 완료")
+        
+        if use_optimization:
+            print("✅ 쿼리 최적화 기능이 활성화되었습니다.")
+        else:
+            print("🚫 쿼리 최적화 기능이 비활성화되었습니다.")
         
         # 대화 히스토리 초기화
         conversation_history = ConversationHistory()
@@ -397,6 +556,7 @@ def main():
             print("        해당 거주자의 소득세는 얼마인가요?)")
             print("   (입력 중 'CLEAR'로 내용 지우기, 'CANCEL'로 입력 취소)")
             print("   (입력 중 히스토리 제어: disable_history, enable_history, clear_history, reset_conversation, clear_and_disable)")
+            print("   (쿼리 최적화 제어: toggle_optimization, optimization_status)")
             print("   (종료하려면 'quit' 또는 'exit' 입력)")
             print("   (대화 히스토리: show_history, clear_history, show_context)")
             print("   (히스토리 제어: disable_history, enable_history, remove_last, remove_history:번호, history_status)")
@@ -470,6 +630,17 @@ def main():
                         else:
                             print("📝 현재 대화 컨텍스트가 없습니다.")
                         continue
+                    # 쿼리 최적화 제어 명령어들
+                    elif line.lower() == 'toggle_optimization':
+                        enhanced_rag.toggle_query_optimization()
+                        continue
+                    elif line.lower() == 'optimization_status':
+                        status = enhanced_rag.get_optimization_status()
+                        print(f"\n🔧 쿼리 최적화 상태:")
+                        print(f"  활성화: {'✅' if status['enabled'] else '❌'}")
+                        print(f"  체인 생성: {'✅' if status['has_chain'] else '❌'}")
+                        print(f"  사전 항목: {status['dictionary_count']}개")
+                        continue
                     else:
                         query_lines.append(line)
                 
@@ -513,11 +684,14 @@ def main():
                 print(f"\n🤖 입력된 질문: {query}")
                 print("-" * 50)
                 
-                # 문서 검색 수행
-                print("🔍 문서 검색 수행 중...")
-                retrieved_docs_with_scores = enhanced_rag.search_documents(query, top_k=5)
+                # 쿼리 개선 및 RAG 처리
+                result = enhanced_rag.process_query_with_improvement(query)
+                
+                # 결과 추출
+                improved_query = result['improved_query']
+                retrieved_docs_with_scores = result['retrieved_docs']
                 retrieved_docs = [doc for doc, _ in retrieved_docs_with_scores]
-                print(f"📚 검색된 관련 문서 수: {len(retrieved_docs)}")
+                ai_response = result['response']
                 
                 # 유사도 점수 분석
                 print("\n🔍 유사도 점수 분석:")
@@ -537,8 +711,9 @@ def main():
                 print("   - 점수가 높을수록 덜 유사함")
                 
                 # 가장 유사한 문서 찾기
-                best_match = min(retrieved_docs_with_scores, key=lambda x: x[1])
-                print(f"\n🏆 가장 유사한 문서: 문서 {retrieved_docs_with_scores.index(best_match) + 1} (점수: {best_match[1]:.4f})")
+                if retrieved_docs_with_scores:
+                    best_match = min(retrieved_docs_with_scores, key=lambda x: x[1])
+                    print(f"\n🏆 가장 유사한 문서: 문서 {retrieved_docs_with_scores.index(best_match) + 1} (점수: {best_match[1]:.4f})")
                 
                 # 전체 문서 내용 출력
                 print("\n📄 전체 문서 내용:")
@@ -549,13 +724,14 @@ def main():
                     print("-" * 40)
                 print("=" * 60)
 
-                # 실제 질의응답 실행
-                print("🧠 AI 응답 생성 중...")
-                
                 # 최종 질의 로그 출력
                 print("\n📝 최종 질의 로그:")
                 print("=" * 60)
                 print(f"원본 질문: {query}")
+                if result['optimization_used']:
+                    print(f"개선된 질문: {improved_query}")
+                else:
+                    print(f"개선된 질문: {improved_query} (최적화 비활성화)")
                 print(f"검색된 문서 수: {len(retrieved_docs)}")
                 print(f"컨텍스트 길이: {sum(len(doc.page_content) for doc in retrieved_docs)}자")
                 print(f"평균 문서 길이: {sum(len(doc.page_content) for doc in retrieved_docs) // len(retrieved_docs) if retrieved_docs else 0}자")
@@ -567,12 +743,10 @@ def main():
                     print(f"  문서 {i} (유사도: {score:.4f}): {doc.page_content[:100]}...")
                 print("=" * 60)
                 
-                # 컨텍스트가 포함된 질문 생성
-                context_query = conversation_history.get_context_for_query(query)
-                
                 # RAG 체인에 전달되는 정보
                 print("🧠 RAG 체인 입력 정보:")
                 print(f"  - 원본 질문: {query}")
+                print(f"  - 개선된 질문: {improved_query}")
                 if conversation_history.current_context:
                     print(f"  - 이전 컨텍스트: {conversation_history.current_context[:100]}...")
                 print(f"  - 컨텍스트 문서 수: {len(retrieved_docs)}")
@@ -581,8 +755,8 @@ def main():
                 print(f"  - Temperature: 0.9")
                 print("=" * 60)
                 
-                # RAG 체인 실행 (컨텍스트 포함)
-                ai_message = qa_chain({"query": context_query})
+                # AI 응답 출력
+                ai_message = {'result': ai_response}
 
                 print("\n" + "=" * 50)
                 print("✅ 최종 응답:")
