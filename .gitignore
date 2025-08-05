@@ -175,10 +175,10 @@ transformers_cache/
 *.pickle
 
 # Document files (if they contain sensitive data)
-*.pdf
-*.docx
-*.doc
-*.txt
+# *.pdf
+# *.docx
+# *.doc
+# *.txt
 !requirements.txt
 !README.md
 !설치절차및명령어모음.txt

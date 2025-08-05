@@ -93,8 +93,8 @@ class EnhancedRAGSystem:
     
     def improve_query(self, query: str) -> str:
         """LLM을 통해 쿼리 개선"""
-        if not self.use_query_optimization:
-            return query  # 쿼리 최적화가 비활성화된 경우 원본 쿼리 반환
+        if not self.use_query_optimization or self.query_improvement_chain is None:
+            return query  # 쿼리 최적화가 비활성화된 경우 또는 체인이 없는 경우 원본 쿼리 반환
         
         try:
             improved_query = self.query_improvement_chain.invoke({"question": query})
@@ -193,7 +193,7 @@ class ConversationHistory:
         self.current_context = ""
         self.history_enabled = True  # 히스토리 활성화 상태
     
-    def add_exchange(self, question: str, answer: str, retrieved_docs: List = None):
+    def add_exchange(self, question: str, answer: str, retrieved_docs: Optional[List] = None):
         """질문-답변 교환 추가"""
         if not self.history_enabled:
             return  # 히스토리가 비활성화된 경우 저장하지 않음
