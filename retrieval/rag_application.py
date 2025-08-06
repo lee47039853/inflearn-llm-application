@@ -118,6 +118,7 @@ class RAGApplication:
     def run(self):
         """애플리케이션 실행"""
         if not self.initialize():
+            print("❌ 애플리케이션 초기화에 실패했습니다.")
             return
         
         print("\n🤖 질문을 입력하세요:")
@@ -164,6 +165,9 @@ class RAGApplication:
                 print("-" * 50)
                 
                 # 쿼리 개선 및 RAG 처리
+                if self.enhanced_rag is None:
+                    print("❌ RAG 시스템이 초기화되지 않았습니다.")
+                    continue
                 result = self.enhanced_rag.process_query_with_improvement(query)
                 
                 # 결과 추출
