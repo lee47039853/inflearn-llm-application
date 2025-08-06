@@ -46,6 +46,7 @@ python 2.lrag_with_genimi_chroma.py
 
 ```bash
 python 3.retrival_with_gemini.py
+python 3.retrival_with_gemini_2.py
 ```
 
 ## 📁 프로젝트 구조
